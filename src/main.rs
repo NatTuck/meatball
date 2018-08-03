@@ -10,6 +10,7 @@ mod program;
 mod builtins;
 
 use std::{env, fs};
+use std::process::Command;
 
 type Result<T> = ::std::result::Result<T, failure::Error>;
 
@@ -18,12 +19,27 @@ fn main() -> Result<()> {
         Some(file_name) => {
             let data = fs::read(file_name)?;
             let text = String::from_utf8(data)?;
-            let mut ast = parse::parse(text)?;
-            ast.push(parse::zero_expr());
+            let ast = parse::parse(text)?;
             let prog = program::Program::new(&ast)?;
             println!("{:?}", prog);
+
+            let asm_code = prog.code()?.to_string();
             println!("\n\n -- ASM --\n");
-            println!("{}", prog.code()?.to_string());
+            println!("{}", &asm_code);
+
+            fs::write("/tmp/mbasm.s", &asm_code)?;
+
+            let mut asm_cmd = Command::new("gcc")
+                .arg("-no-pie")
+                .arg("-o")
+                .arg("/tmp/mbasm")
+                .arg("/tmp/mbasm.s")
+                .spawn()?;
+            asm_cmd.wait()?;
+
+            let mut run_cmd = Command::new("/tmp/mbasm")
+                .spawn()?;
+            run_cmd.wait()?;
         },
         None => {
             println!("please provide source file to compile");

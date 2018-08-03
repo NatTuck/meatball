@@ -47,12 +47,11 @@ impl Program {
     }
 
     pub fn code(&self) -> Result<String> {
-        let call_entry = "foo";
-        let mut more_code = String::from("");
+        let mut code_text = String::from("");
 
         for (name, func) in &self.mods {
             let text = func.code(&name)?;
-            more_code.push_str(&text);
+            code_text.push_str(&text);
         }
 
         let code = format!(r####"
@@ -69,12 +68,11 @@ main:
   call printf
   ret
 
-{}
 
   .data
 _mb_main_result: .string "result = %ld\n"
 
-"####, call_entry, more_code);
+"####, code_text);
         Ok(code)
     }
 }
