@@ -8,24 +8,18 @@ use ::Result;
 #[derive(Clone, Debug, PartialOrd, PartialEq)]
 pub struct Program {
     pub entry: String,
-    pub mods: BTreeMap<String, Block>,
+    pub mods: BTreeMap<String, Func>,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq)]
 pub struct Func {
-    pub name: Option<String>,
-    pub params: Vec<String>,
-    pub body: Vec<Expr>,
-}
-
-#[derive(Clone, Debug, PartialOrd, PartialEq)]
-pub struct Block {
     // Vars have access to bindings:
     //  - In parent scopes.
     //  - That came earlier in the same scope.
     //  - Of functions in the same scope.
-    pub vars: Vec<(String, Expr)>,
-    pub expr: Expr,
+    pub name: Option<String>,
+    pub params: Vec<String>,
+    pub body: Vec<Expr>,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq)]
@@ -35,12 +29,14 @@ pub enum Expr {
     Call(String, Vec<Expr>),
     Cond(Vec<(Expr, Expr)>),
     Func(Box<Func>),
-    Block(Box<Block>),
 }
 
 impl Program {
     pub fn new(ast: &[Ast]) -> Result<Self> {
-        let main = Block::new(ast)?;
+        let mut wrap = vec![Ast::App(vec![])];
+        wrap.extend_from_slice(ast);
+
+        let main = Func::new(&wrap[..])?;
         let mut mods = BTreeMap::new();
         mods.insert("main".to_string(), main);
         let prgm = Program{
@@ -50,16 +46,16 @@ impl Program {
         Ok(prgm)
     }
 
-    pub fn code(&self) -> String {
+    pub fn code(&self) -> Result<String> {
         let call_entry = "foo";
-        let mut more_code = "";
+        let mut more_code = String::from("");
 
-        for (name, body) in &self.mods {
-            let text = body.code(name);
+        for (name, func) in &self.mods {
+            let text = func.code(&name)?;
             more_code.push_str(&text);
         }
 
-        format!(r####"
+        let code = format!(r####"
   .global main
 
   .text
@@ -78,7 +74,8 @@ main:
   .data
 _mb_main_result: .string "result = %ld\n"
 
-"####, call_entry, more_code)
+"####, call_entry, more_code);
+        Ok(code)
     }
 }
 
@@ -109,32 +106,6 @@ fn ast2var(ast: &[Ast]) -> Result<(String, Expr)> {
         other => {
             bail!("Expected let, got: {:?}", other);
         }
-    }
-}
-
-impl Block {
-    pub fn new(ast: &[Ast]) -> Result<Self> {
-        if let Some((ex, vs)) = ast.split_last() {
-            let mut vars = vec![];
-            for vv in vs {
-                if let Ast::App(parts) = vv {
-                    vars.push(ast2var(parts)?);
-                }
-                else {
-                    bail!("early expression in block");
-                }
-            }
-            let expr = Expr::new(ex)?;
-            let bb = Block{ vars, expr };
-            Ok(bb)
-        }
-        else {
-            bail!("empty block");
-        }
-    }
-
-    pub fn code(&self, prefix: &str) -> String {
-        self.expr.code(prefix)
     }
 }
 
@@ -176,13 +147,39 @@ impl Expr {
             }
         }
     }
+
+    pub fn code(&self, prefix: &str) -> Result<String> {
+        match self {
+            Expr::I64(nn) => {
+                Ok(format!("  mov ${}, %rax\n", nn))
+            },
+            Expr::Var(name) => {
+                let vpos = format!("{}??(%rsp)", name);
+                Ok(format!("  mov {}, %rax\n", vpos))
+            },
+            Expr::Call(name, args) => {
+                // Allocate frame for {name}
+                // for each arg:
+                //   calc result
+                //   mov result to slot in frame
+                Ok(format!("  [[funcall: {} {:?}]]", name, args))
+            },
+            Expr::Cond(_parts) => {
+                bail!("giving up");
+            }
+            Expr::Func(func) => {
+                func.code(prefix)
+            }
+        }
+    }
 }
 
 impl Func {
     pub fn new(ast: &[Ast]) -> Result<Self> {
         if let Some((Ast::App(pas), bas)) = ast.split_first() {
+            let mut pas = pas.clone();
             if pas.is_empty() {
-                bail!("No zero-len def");
+                pas.push(Ast::Sym(String::from("derp"), Src::default()));
             }
 
             let mut params = vec![];
@@ -196,14 +193,29 @@ impl Func {
             }
 
             let name = Some(params[0].clone());
-            let body = Block::new(bas)?;
+
+            let mut body = vec![];
+            for bb in bas {
+                body.push(Expr::new(bb)?);
+            }
+
             let params = params[1..].iter().cloned().collect();
             let ff = Func{ name, body, params };
             Ok(ff)
         }
         else {
-            bail!("empty Func");
+            bail!("empty Func: {:?}", &ast);
         }
+    }
+
+    pub fn code(&self, prefix: &str) -> Result<String> {
+        let mut code = String::from("");
+
+        for exp in &self.body {
+            code.push_str(&exp.code(prefix)?);
+        }
+
+        Ok(code)
     }
 }
 

@@ -23,7 +23,7 @@ fn main() -> Result<()> {
             let prog = program::Program::new(&ast)?;
             println!("{:?}", prog);
             println!("\n\n -- ASM --\n");
-            println!("{}", prog.code());
+            println!("{}", prog.code()?.to_string());
         },
         None => {
             println!("please provide source file to compile");
